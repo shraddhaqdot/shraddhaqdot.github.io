@@ -110,6 +110,44 @@
   header {
     padding: 5rem 0 3.5rem;
     border-bottom: 1px solid var(--border);
+    position: relative;
+    overflow: hidden;
+  }
+  header .wrap { position: relative; z-index: 1; }
+
+  /* ─── QUANTUM ANIMATIONS ─────────────────────────────── */
+  #circuitBg {
+    position: absolute;
+    inset: 0;
+    width: 100%;
+    height: 100%;
+    z-index: 0;
+    pointer-events: none;
+    -webkit-mask-image: linear-gradient(90deg, rgba(0,0,0,0.15) 0%, rgba(0,0,0,0.55) 45%, #000 100%);
+            mask-image: linear-gradient(90deg, rgba(0,0,0,0.15) 0%, rgba(0,0,0,0.55) 45%, #000 100%);
+  }
+  #bloch {
+    position: absolute;
+    top: -0.75rem;
+    right: 1rem;
+    width: 170px;
+    height: 170px;
+    border-radius: 50%;
+    background: radial-gradient(circle, var(--bg) 55%, transparent 72%);
+  }
+  .bloch-caption {
+    position: absolute;
+    top: 9.9rem;
+    right: 1rem;
+    width: 170px;
+    text-align: center;
+    font-family: var(--serif);
+    font-style: italic;
+    font-size: 0.72rem;
+    color: var(--muted);
+  }
+  @media (max-width: 640px) {
+    #bloch, .bloch-caption { display: none; }
   }
   .header-eyebrow {
     font-size: 0.78rem;
@@ -349,7 +387,10 @@
 
 <!-- ── HEADER ────────────────────────────────────────────── -->
 <header>
+<canvas id="circuitBg" aria-hidden="true"></canvas>
 <div class="wrap">
+  <canvas id="bloch" aria-hidden="true"></canvas>
+  <div class="bloch-caption" aria-hidden="true">|ψ⟩ on the Bloch sphere</div>
   <div class="header-eyebrow">Physics · Quantum Information</div>
   <h1>Shraddhanjali<br><em>Choudhury</em></h1>
   <p class="header-desc">
@@ -626,6 +667,202 @@
     try { localStorage.setItem('theme', next); } catch (e) {}
     btn.textContent = next === 'dark' ? '☾' : '☀';
   });
+</script>
+
+<script>
+/* ═══ Quantum animations ═══════════════════════════════════
+   1. Brickwork random circuit behind the header, with operator
+      light cones spreading through the gates.
+   2. A Bloch sphere with a precessing qubit state.
+   Respects prefers-reduced-motion and pauses when off-screen.  */
+(function () {
+  const reduce = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+  const css = (v) => getComputedStyle(document.documentElement).getPropertyValue(v).trim();
+  const hexA = (hex, a) => {
+    const h = hex.replace('#', '');
+    const n = parseInt(h.length === 3 ? h.split('').map(c => c + c).join('') : h, 16);
+    return `rgba(${(n >> 16) & 255},${(n >> 8) & 255},${n & 255},${a})`;
+  };
+  const header = document.querySelector('header');
+  let visible = true;
+  if ('IntersectionObserver' in window) {
+    new IntersectionObserver(([e]) => { visible = e.isIntersecting; }).observe(header);
+  }
+
+  /* ── 1. Brickwork circuit ─────────────────────────────── */
+  const cv = document.getElementById('circuitBg');
+  const cx = cv.getContext('2d');
+  const N = 8;            // qubit wires
+  const DX = 64;          // spacing between circuit layers (px)
+  const SPEED = 14;       // drift (px / s)
+  const CONE_DT = 0.32;   // seconds per layer for the light-cone front
+  let W = 0, H = 0, dpr = 1;
+  let cones = [];
+
+  function resizeCircuit() {
+    dpr = Math.min(window.devicePixelRatio || 1, 2);
+    W = header.clientWidth; H = header.clientHeight;
+    cv.width = W * dpr; cv.height = H * dpr;
+    cx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  }
+  function spawnCone(t, offset) {
+    const k0 = Math.floor((offset + W * (0.35 + Math.random() * 0.25)) / DX);
+    cones.push({ k0, q: Math.floor(Math.random() * N), t0: t });
+    if (cones.length > 3) cones.shift();
+  }
+  // brightness of gate (k, i) — i is the upper wire of the pair (i, i+1)
+  function coneHeat(k, i, t) {
+    let h = 0;
+    for (const c of cones) {
+      const layers = (t - c.t0) / CONE_DT;     // how far the front has travelled
+      const dk = k - c.k0;
+      if (dk < 0 || dk > layers) continue;
+      const dist = Math.min(Math.abs(i - c.q), Math.abs(i + 1 - c.q));
+      if (dist > dk) continue;                 // outside the light cone
+      const age = layers - dk;                 // layers since the front passed
+      const life = Math.max(0, 1 - (t - c.t0) / 14);
+      h = Math.max(h, Math.exp(-age / 3.5) * life * (age < 1 ? age : 1));
+    }
+    return h;
+  }
+  function drawCircuit(t) {
+    const offset = t * SPEED;
+    const accent = css('--accent'), border = css('--border'), muted = css('--muted');
+    cx.clearRect(0, 0, W, H);
+    const top = H * 0.12, gap = (H * 0.76) / (N - 1);
+    const y = (i) => top + i * gap;
+
+    cx.lineWidth = 1;
+    cx.strokeStyle = hexA(muted, 0.28);
+    for (let i = 0; i < N; i++) {
+      cx.beginPath(); cx.moveTo(0, y(i)); cx.lineTo(W, y(i)); cx.stroke();
+    }
+    const kStart = Math.floor(offset / DX) - 1, kEnd = Math.ceil((offset + W) / DX) + 1;
+    for (let k = kStart; k <= kEnd; k++) {
+      const x = k * DX - offset;
+      for (let i = ((k % 2) + 2) % 2; i < N - 1; i += 2) {
+        const h = coneHeat(k, i, t);
+        const gx = x - 9, gy = y(i) - 7, gw = 18, gh = y(i + 1) - y(i) + 14;
+        cx.beginPath();
+        if (cx.roundRect) cx.roundRect(gx, gy, gw, gh, 4); else cx.rect(gx, gy, gw, gh);
+        cx.fillStyle = h > 0.02 ? hexA(accent, 0.08 + 0.4 * h) : hexA(border, 0.35);
+        cx.fill();
+        cx.strokeStyle = h > 0.02 ? hexA(accent, 0.3 + 0.5 * h) : hexA(muted, 0.35);
+        cx.stroke();
+      }
+    }
+  }
+
+  /* ── 2. Bloch sphere ──────────────────────────────────── */
+  const bc = document.getElementById('bloch');
+  const bx = bc.getContext('2d');
+  const S = 170, R = 58, C = S / 2;
+  const EL = 0.32, AZ = -0.6;          // camera elevation / azimuth
+  const trail = [];
+  function setupBloch() {
+    const d = Math.min(window.devicePixelRatio || 1, 2);
+    bc.width = S * d; bc.height = S * d;
+    bx.setTransform(d, 0, 0, d, 0, 0);
+  }
+  function proj(x, y, z) {
+    const xr = x * Math.cos(AZ) - y * Math.sin(AZ);
+    const yr = x * Math.sin(AZ) + y * Math.cos(AZ);
+    return {
+      X: C + R * xr,
+      Y: C - R * (z * Math.cos(EL) - yr * Math.sin(EL)),
+      d: yr * Math.cos(EL) + z * Math.sin(EL)   // < 0 → behind the sphere
+    };
+  }
+  function ring(fn, col, dashBack) {
+    let prev = null;
+    for (let s = 0; s <= 96; s++) {
+      const p = fn((s / 96) * 2 * Math.PI);
+      if (prev) {
+        bx.beginPath();
+        bx.setLineDash(p.d < 0 && dashBack ? [2, 3] : []);
+        bx.globalAlpha = p.d < 0 ? 0.45 : 1;
+        bx.moveTo(prev.X, prev.Y); bx.lineTo(p.X, p.Y);
+        bx.strokeStyle = col; bx.stroke();
+      }
+      prev = p;
+    }
+    bx.setLineDash([]); bx.globalAlpha = 1;
+  }
+  function drawBloch(t) {
+    const accent = css('--accent'), accent2 = css('--accent2'),
+          muted = css('--muted'), border = css('--border'), heading = css('--heading');
+    bx.clearRect(0, 0, S, S);
+    bx.lineWidth = 1;
+
+    // outline + great circles
+    bx.beginPath(); bx.arc(C, C, R, 0, 2 * Math.PI);
+    bx.strokeStyle = hexA(muted, 0.6); bx.stroke();
+    ring((a) => proj(Math.cos(a), Math.sin(a), 0), hexA(muted, 0.55), true);
+    ring((a) => proj(Math.cos(a), 0, Math.sin(a)), hexA(border, 0.9), true);
+
+    // axes
+    const axes = [[0, 0, 1, '|0⟩'], [0, 0, -1, '|1⟩'], [1, 0, 0, 'x'], [0, 1, 0, 'y']];
+    bx.font = '11px Lora, Georgia, serif';
+    bx.textAlign = 'center'; bx.textBaseline = 'middle';
+    for (const [x, y, z, lab] of axes) {
+      const o = proj(0, 0, 0), p = proj(x, y, z), q = proj(x * 1.28, y * 1.28, z * 1.28);
+      bx.beginPath(); bx.moveTo(o.X, o.Y); bx.lineTo(p.X, p.Y);
+      bx.setLineDash([2, 3]); bx.strokeStyle = hexA(muted, 0.45); bx.stroke(); bx.setLineDash([]);
+      bx.fillStyle = lab.startsWith('|') ? hexA(heading, 0.85) : hexA(muted, 0.8);
+      bx.fillText(lab, q.X, q.Y);
+    }
+
+    // state: Larmor precession in φ + slow Rabi-like nutation in θ
+    const phi = t * 0.9;
+    const theta = Math.PI / 2 + 1.05 * Math.sin(t * 0.23);
+    const sx = Math.sin(theta) * Math.cos(phi), sy = Math.sin(theta) * Math.sin(phi), sz = Math.cos(theta);
+    trail.push([sx, sy, sz]);
+    if (trail.length > 140) trail.shift();
+
+    for (let j = 1; j < trail.length; j++) {
+      const a = proj(...trail[j - 1]), b = proj(...trail[j]);
+      bx.beginPath(); bx.moveTo(a.X, a.Y); bx.lineTo(b.X, b.Y);
+      bx.strokeStyle = hexA(accent2, (j / trail.length) * (b.d < 0 ? 0.35 : 0.8));
+      bx.lineWidth = 1.4; bx.stroke();
+    }
+    bx.lineWidth = 1;
+
+    const o = proj(0, 0, 0), tip = proj(sx, sy, sz);
+    bx.beginPath(); bx.moveTo(o.X, o.Y); bx.lineTo(tip.X, tip.Y);
+    bx.strokeStyle = accent; bx.lineWidth = 2; bx.stroke(); bx.lineWidth = 1;
+    const g = bx.createRadialGradient(tip.X, tip.Y, 0, tip.X, tip.Y, 9);
+    g.addColorStop(0, hexA(accent, 0.9)); g.addColorStop(1, hexA(accent, 0));
+    bx.fillStyle = g; bx.beginPath(); bx.arc(tip.X, tip.Y, 9, 0, 2 * Math.PI); bx.fill();
+    bx.fillStyle = accent; bx.beginPath(); bx.arc(tip.X, tip.Y, 3, 0, 2 * Math.PI); bx.fill();
+    bx.beginPath(); bx.arc(o.X, o.Y, 1.8, 0, 2 * Math.PI); bx.fillStyle = muted; bx.fill();
+  }
+
+  /* ── loop ─────────────────────────────────────────────── */
+  resizeCircuit(); setupBloch();
+  window.addEventListener('resize', resizeCircuit);
+  document.getElementById('themeBtn').addEventListener('click', () => {
+    if (reduce) { drawCircuit(6); drawBloch(2); }
+  });
+
+  if (reduce) {
+    cones = [{ k0: 4, q: 3, t0: 0 }];
+    drawCircuit(6);
+    for (let s = 0; s < 140; s++) drawBloch(2 + s * 0.016);
+    return;
+  }
+  const start = performance.now();
+  let nextCone = 0;
+  function frame(now) {
+    const t = (now - start) / 1000;
+    if (visible) {
+      if (t >= nextCone) { spawnCone(t, t * SPEED); nextCone = t + 4.5; }
+      drawCircuit(t);
+      drawBloch(t);
+    }
+    requestAnimationFrame(frame);
+  }
+  requestAnimationFrame(frame);
+})();
 </script>
 </body>
 </html>
